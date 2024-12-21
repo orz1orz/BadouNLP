@@ -14,38 +14,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-
-"""
-
-基于pytorch的网络编写
-实现一个网络完成一个简单nlp任务
-判断文本中是否有某些特定字符出现
-
-尝试修改nlpdemo，
-做一个多分类任务，
-判断特定字符在字符串的第几个位置，使用rnn和交叉熵。
-样本：你我他def x=我   输出y=[0 1 0 0 0 0]
-样本：你我他def x=他   输出y=[0 0 1 0 0 0]
-样本：你我他def x=d   输出y=[0 0 0 1 0 0]
-样本：你我他def x=e   输出y=[0 0 0 0 1 0]
-样本：你我他def x=f   输出y=[0 0 0 0 0 1]
-"""
-
-
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 class TorchModel(nn.Module):
     def __init__(self, vector_dim, sentence_length, vocab):
         super(TorchModel, self).__init__()
         self.embedding = nn.Embedding(len(vocab), vector_dim, padding_idx=0)  # embedding层
-        self.pool = nn.AvgPool1d(sentence_length)  # 池化层
+        self.lstm = nn.LSTM(vector_dim, vector_dim, batch_first=True)  # LSTM层
         self.classify = nn.Linear(vector_dim, sentence_length)  # 线性层
         self.loss = nn.functional.cross_entropy  #
 
     # 当输入真实标签，返回loss值；无真实标签，返回预测值
     def forward(self, x, y=None):
         x = self.embedding(x)  # (batch_size, sen_len) -> (batch_size, sen_len, vector_dim)
-        x = x.transpose(1, 2)  # (batch_size, sen_len, vector_dim) -> (batch_size, vector_dim, sen_len)
-        x = self.pool(x)  # (batch_size, vector_dim, sen_len)->(batch_size, vector_dim, 1)
-        x = x.squeeze()  # (batch_size, vector_dim, 1) -> (batch_size, vector_dim)
+        x, _ = self.lstm(x)  # (batch_size, sen_len, vector_dim)
+        x = x[:, -1, :]  # 取最后一个时间步的输出
         y_pred = self.classify(x)  # (batch_size, vector_dim) -> (batch_size, vector_dim)
         if y is not None:
             return self.loss(y_pred, y)  # 预测值和真实值计算损失
@@ -88,7 +71,6 @@ def build_sample(vocab, sentence_length):
     # 随机从字表选取sentence_length个字，可能重复
     x, one_char = get_random_chars(vocab, "我你他", sentence_length)
     y = x.index(one_char)
-    print(x, one_char)
     x = [vocab.get(word, vocab['unk']) for word in x]  # 将字转换成序号，为了做embedding
     return x, y
 
@@ -161,11 +143,10 @@ def main():
     plt.legend()
     plt.show()
     # 保存模型
-    torch.save(model.state_dict(), "model.pth")
+    torch.save(model.state_dict(), "model.checkpoint")
     # 保存词表
-    writer = open("vocab.json", "w", encoding="utf8")
-    writer.write(json.dumps(vocab, ensure_ascii=False, indent=2))
-    writer.close()
+    with open("vocab.json", "w", encoding="utf8") as writer:
+        writer.write(json.dumps(vocab, ensure_ascii=False, indent=2))
     return
 
 
@@ -175,7 +156,7 @@ def predict(model_path, vocab_path, input_strings):
     sentence_length = 6  # 样本文本长度
     vocab = json.load(open(vocab_path, "r", encoding="utf8"))  # 加载字符表
     model = build_model(vocab, char_dim, sentence_length)  # 建立模型
-    model.load_state_dict(torch.load(model_path))  # 加载训练好的权重
+    model.load_state_dict(torch.load(model_path,weights_only=True))  # 加载训练好的权重
     x = []
     for input_string in input_strings:
         x.append([vocab[char] for char in input_string])  # 将输入序列化
@@ -184,11 +165,11 @@ def predict(model_path, vocab_path, input_strings):
     with torch.no_grad():  # 不计算梯度
         y_pred = model.forward(torch.LongTensor(x))  # 模型预测
         y_pred_max = torch.argmax(y_pred, dim=1)  # 获取预测的最大值索引
-        for x_t, y_p, y_p_max in zip(x, y_pred, y_pred_max):
+        for x_t, y_p, y_p_max in zip(input_strings, y_pred, y_pred_max):
             print("input:{} y_pred:{} predict:{}".format(x_t, y_p, y_p_max))  # 打印输入和预测结果
 
 
 if __name__ == "__main__":
     main()
     test_strings = ["fnvfe你", "wz你dfg", "rqw你eg", "n我kwww"]
-    predict("model.pth", "vocab.json", test_strings)
+    predict("model.checkpoint", "vocab.json", test_strings)
